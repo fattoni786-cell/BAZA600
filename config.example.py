@@ -17,14 +17,14 @@ BAZA_DB_PATH = os.getenv("BAZA_DB_PATH", "runtime/baza_users.db")
 PREMIUM_PLANS = {
     "premium_6_days": {
         "days": 6,
-        "price_xtr": 66,
+        "price_xtr": 149,
     },
     "premium_60_days": {
         "days": 60,
-        "price_xtr": 199,
+        "price_xtr": 600,
     },
     "premium_600_days": {
         "days": 600,
-        "price_xtr": 600,
+        "price_xtr": 2999,
     },
 }
