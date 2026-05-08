@@ -2,6 +2,16 @@ __pycache__/
 .env
 config.py
 *.pyc
+*.log
+*.db
+*.sqlite
+*.sqlite3
 venv/
 .idea/
 .vscode/
+backups/
+logs/
+runtime/
+data/*.db
+data/*.sqlite
+data/*.sqlite3

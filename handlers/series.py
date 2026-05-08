@@ -3,16 +3,16 @@ from aiogram.enums import ChatAction
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from data.add_movies import get_random_movie, load_movies
-from keyboards.movies.menu import movies_mode_kb
-from keyboards.movies.personal import (
-    movie_personal_question_keyboard,
-    movie_personal_prompt_keyboard,
-    personal_movie_keyboard,
+from data.series import get_random_series, load_series
+from keyboards.series.menu import series_mode_kb
+from keyboards.series.personal import (
+    personal_series_keyboard,
+    series_personal_prompt_keyboard,
+    series_personal_question_keyboard,
 )
-from keyboards.movies.vibes import another_movie_keyboard, movie_vibe_keyboard
+from keyboards.series.vibes import another_series_keyboard, series_vibe_keyboard
 from keyboards.common.premium_collections import premium_collections_keyboard
-from states.movie_personal import MoviePersonalQuiz
+from states.series_personal import SeriesPersonalQuiz
 from utils.access import (
     consume_free_personal_use,
     free_personal_locked_text,
@@ -23,7 +23,7 @@ from utils.access import (
 from utils.ai_fallback import ai_unavailable_text
 from utils.ai_clarification import combine_prompt_with_clarification, personal_clarification_question
 from utils.ai_rate_limit import ai_rate_limit_text, check_ai_request_limit
-from utils.ai_personal_movies import recommend_movies_from_prompt
+from utils.ai_personal_content import recommend_content_from_prompt
 from utils.content_history import get_recently_seen_titles, record_content_impression
 from utils.db import get_user_rating, is_in_favorites
 from utils.flow_fx import pick_phrase, pulse_chat_action, show_transition_screen
@@ -35,11 +35,11 @@ from utils.premium_collections import (
     get_random_item_from_collection,
     has_more_in_collection,
 )
-from utils.personal_movies import (
+from utils.personal_series import (
     QUESTION_COUNT,
     get_question,
     pick_random_questions,
-    recommend_movies,
+    recommend_series,
 )
 from utils.text_limits import (
     MAX_AI_PROMPT_LENGTH,
@@ -52,47 +52,43 @@ from utils.ui import delete_tracked_message, replace_screen, replace_with_new_sc
 
 router = Router()
 
-MOVIE_TRANSITION_LINES = [
-    "Смотрю, что сейчас отзовётся сильнее всего.",
-    "Собираю твой вайб по кусочкам.",
-    "Проверяю, где у тебя сейчас самое точное попадание.",
-    "Пытаюсь поймать не жанр, а внутренний тон.",
+SERIES_TRANSITION_LINES = [
+    "Смотрю, где у тебя сейчас может случиться залипание с первой серии.",
+    "Пытаюсь поймать сериал, который удержит твой ритм.",
+    "Собираю не просто жанр, а нужную тебе длину волны.",
+    "Проверяю, что сейчас захватит тебя сильнее остального.",
 ]
 
 
-def get_movie_by_title(title: str) -> dict | None:
-    for movie in load_movies():
-        if movie["title"] == title:
-            return movie
+def get_series_by_title(title: str) -> dict | None:
+    for series in load_series():
+        if series["title"] == title:
+            return series
     return None
 
 
-async def show_movie_collections_screen(callback: CallbackQuery, state: FSMContext):
+async def show_series_collections_screen(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    options = data.get("movie_collection_options", [])
+    options = data.get("series_collection_options", [])
 
     await replace_screen(
         callback,
         text=(
-            "💎 <b>Premium-подборки фильмов</b>\n\n"
-            "Здесь не про вайб одним словом, а про готовые тематические выборы.\n"
-            "Выбери, что сейчас ближе."
+            "💎 <b>Premium-подборки сериалов</b>\n\n"
+            "Здесь уже готовые тематические заходы под конкретный просмотр."
         ),
         reply_markup=premium_collections_keyboard(
             options=options,
-            pick_prefix="movie_collection_pick",
-            refresh_callback="movies_collections_refresh",
+            pick_prefix="series_collection_pick",
+            refresh_callback="series_collections_refresh",
         ),
     )
 
 
-async def show_movie_personal_question(
-    callback: CallbackQuery,
-    state: FSMContext,
-):
+async def show_series_personal_question(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    question_ids = data.get("movie_personal_question_ids", [])
-    current_index = data.get("movie_personal_question_index", 0)
+    question_ids = data.get("series_personal_question_ids", [])
+    current_index = data.get("series_personal_question_index", 0)
 
     if current_index >= len(question_ids):
         await callback.answer("Вопросы закончились")
@@ -101,16 +97,16 @@ async def show_movie_personal_question(
     question = get_question(question_ids[current_index])
     total = len(question_ids)
     text = (
-        "🧠 <b>Персональный подбор фильма</b>\n\n"
-        "Отвечай быстро и по ощущению. Я попробую поймать не жанр, "
-        "а именно твой сегодняшний вайб.\n\n"
+        "🧠 <b>Персональный подбор сериала</b>\n\n"
+        "Отвечай быстро и по вайбу. Я попробую поймать твой текущий "
+        "сериальный настрой.\n\n"
         f"<b>{question['text']}</b>"
     )
 
     await replace_screen(
         callback,
         text=text,
-        reply_markup=movie_personal_question_keyboard(
+        reply_markup=series_personal_question_keyboard(
             answers=[answer["text"] for answer in question["answers"]],
             current_index=current_index,
             total=total,
@@ -118,39 +114,39 @@ async def show_movie_personal_question(
     )
 
 
-async def show_personal_movie_result(
+async def show_personal_series_result(
     callback: CallbackQuery,
     state: FSMContext,
     user: dict,
     candidate_index: int,
 ):
     data = await state.get_data()
-    candidates = data.get("movie_personal_candidates", [])
+    candidates = data.get("series_personal_candidates", [])
 
     if candidate_index < 0 or candidate_index >= len(candidates):
         await callback.answer("Запасных вариантов больше нет", show_alert=True)
         return
 
     candidate = candidates[candidate_index]
-    movie = get_movie_by_title(candidate["title"])
+    series = get_series_by_title(candidate["title"])
 
-    if not movie:
-        await callback.answer("Фильм не найден", show_alert=True)
+    if not series:
+        await callback.answer("Сериал не найден", show_alert=True)
         return
 
-    is_fav = is_in_favorites(user["telegram_id"], "movie", movie["title"])
-    user_rating = get_user_rating(user["telegram_id"], "movie", movie["title"])
+    is_fav = is_in_favorites(user["telegram_id"], "series", series["title"])
+    user_rating = get_user_rating(user["telegram_id"], "series", series["title"])
     has_backup = candidate_index < len(candidates) - 1
 
     await state.update_data(
-        current_item=movie,
-        current_type="movie",
+        current_item=series,
+        current_type="series",
         current_vibe=None,
-        current_source="movie_personal",
+        current_source="series_personal",
         current_caption_extra=candidate["explanation"],
         personal_candidate_index=candidate_index,
     )
-    record_content_impression(user["telegram_id"], "movie", movie["title"])
+    record_content_impression(user["telegram_id"], "series", series["title"])
 
     try:
         await callback.message.delete()
@@ -159,11 +155,11 @@ async def show_personal_movie_result(
 
     sent_message = await send_media(
         callback=callback,
-        item=movie,
-        content_type="movie",
-        reply_markup=personal_movie_keyboard(
+        item=series,
+        content_type="series",
+        reply_markup=personal_series_keyboard(
             has_backup=has_backup,
-            title=movie["title"],
+            title=series["title"],
             is_favorite=is_fav,
             user_rating=user_rating,
             is_premium=has_premium_access(user),
@@ -172,27 +168,27 @@ async def show_personal_movie_result(
     )
 
 
-@router.callback_query(F.data == "choose_movie")
-async def choose_movie(callback: CallbackQuery, user: dict, state: FSMContext):
+@router.callback_query(F.data == "choose_series")
+async def choose_series(callback: CallbackQuery, user: dict, state: FSMContext):
     await state.clear()
 
     await replace_screen(
         callback,
-        text="🎬 Как будем подбирать фильм?",
-        reply_markup=movies_mode_kb(),
+        text="📺 Как будем подбирать сериал?",
+        reply_markup=series_mode_kb(),
     )
 
 
-@router.callback_query(F.data == "movies_fast")
-async def movies_fast(callback: CallbackQuery, user: dict, state: FSMContext):
+@router.callback_query(F.data == "series_fast")
+async def series_fast(callback: CallbackQuery, user: dict, state: FSMContext):
     await state.update_data(fast_vibe_seen_count=0)
-    excluded_titles = get_recently_seen_titles(user["telegram_id"], "movie")
-    keyboard = movie_vibe_keyboard(excluded_titles=excluded_titles)
-    text = "🎬 Какой сейчас вайб?"
+    excluded_titles = get_recently_seen_titles(user["telegram_id"], "series")
+    keyboard = series_vibe_keyboard(excluded_titles=excluded_titles)
+    text = "📺 Какой сейчас вайб?"
 
     if len(keyboard.inline_keyboard) <= 2:
         text = (
-            "🎬 По фильмам ты уже выжег все свежие вайбы за последнее время.\n\n"
+            "📺 По сериалам ты уже выжег все свежие вайбы за последнее время.\n\n"
             "Попробуй чуть позже, или нажми 🦉 Удиви меня."
         )
 
@@ -204,36 +200,36 @@ async def movies_fast(callback: CallbackQuery, user: dict, state: FSMContext):
     await track_active_screen(state, sent_message)
 
 
-@router.callback_query(F.data == "movies_surprise")
-async def movies_surprise(callback: CallbackQuery, user: dict, state: FSMContext):
-    movie = get_random_movie(
-        excluded_titles=get_recently_seen_titles(user["telegram_id"], "movie"),
+@router.callback_query(F.data == "series_surprise")
+async def series_surprise(callback: CallbackQuery, user: dict, state: FSMContext):
+    series = get_random_series(
+        excluded_titles=get_recently_seen_titles(user["telegram_id"], "series"),
     )
 
-    if not movie:
-        await callback.answer("Фильм не найден", show_alert=True)
+    if not series:
+        await callback.answer("Сериал не найден", show_alert=True)
         return
 
     await state.update_data(
-        current_item=movie,
-        current_type="movie",
+        current_item=series,
+        current_type="series",
         current_vibe=None,
-        current_source="movie_surprise",
+        current_source="series_surprise",
         current_caption_extra=None,
     )
-    record_content_impression(user["telegram_id"], "movie", movie["title"])
+    record_content_impression(user["telegram_id"], "series", series["title"])
 
-    is_fav = is_in_favorites(user["telegram_id"], "movie", movie["title"])
-    user_rating = get_user_rating(user["telegram_id"], "movie", movie["title"])
+    is_fav = is_in_favorites(user["telegram_id"], "series", series["title"])
+    user_rating = get_user_rating(user["telegram_id"], "series", series["title"])
 
     await callback.message.delete()
     sent_message = await send_media(
         callback=callback,
-        item=movie,
-        content_type="movie",
-        reply_markup=another_movie_keyboard(
+        item=series,
+        content_type="series",
+        reply_markup=another_series_keyboard(
             vibe=None,
-            title=movie["title"],
+            title=series["title"],
             is_favorite=is_fav,
             user_rating=user_rating,
             is_premium=has_premium_access(user),
@@ -242,22 +238,22 @@ async def movies_surprise(callback: CallbackQuery, user: dict, state: FSMContext
     await track_active_screen(state, sent_message)
 
 
-@router.callback_query(F.data == "movies_personal")
-async def movies_personal(callback: CallbackQuery, user: dict, state: FSMContext):
+@router.callback_query(F.data == "series_personal")
+async def series_personal(callback: CallbackQuery, user: dict, state: FSMContext):
     if not has_premium_access(user):
         can_use, next_available_at = free_personal_status(user)
         if not can_use and next_available_at:
             await replace_screen(
                 callback,
-                text=free_personal_locked_text("Персональный подбор фильмов", next_available_at),
-                reply_markup=movies_mode_kb(),
+                text=free_personal_locked_text("Персональный подбор сериалов", next_available_at),
+                reply_markup=series_mode_kb(),
             )
             return
         consume_free_personal_use(user["telegram_id"])
 
-    await state.set_state(MoviePersonalQuiz.describing)
+    await state.set_state(SeriesPersonalQuiz.describing)
     await state.update_data(
-        movie_personal_candidates=[],
+        series_personal_candidates=[],
         personal_candidate_index=0,
         current_source=None,
         current_caption_extra=None,
@@ -268,21 +264,21 @@ async def movies_personal(callback: CallbackQuery, user: dict, state: FSMContext
     prompt_message = await replace_with_new_screen(
         callback,
         text=(
-            "🧠 <b>Персональный подбор фильма</b>\n\n"
-            "Опиши вайб одним сообщением: настроение, с кем смотришь, "
-            "чего хочется и чего точно не хочется.\n\n"
+            "🧠 <b>Персональный подбор сериала</b>\n\n"
+            "Опиши, какой сериал хочется: темп, настроение, длина, "
+            "что любишь и что точно не надо.\n\n"
             "Например:\n"
-            "<i>Хочу что-то мрачное, но не хоррор. Чтобы было про одиночество, "
-            "красиво и после фильма хотелось молчать.</i>"
+            "<i>Хочу что-то мрачное, умное и затягивающее, но без супергероики. "
+            "Чтобы была тайна и взрослый нерв.</i>"
         ),
-        reply_markup=movie_personal_prompt_keyboard(),
+        reply_markup=series_personal_prompt_keyboard(),
     )
     if prompt_message:
         await state.update_data(last_personal_prompt_message_id=prompt_message.message_id)
 
 
-@router.message(MoviePersonalQuiz.describing, F.text)
-async def movie_personal_description(message: Message, user: dict, state: FSMContext):
+@router.message(SeriesPersonalQuiz.describing, F.text)
+async def series_personal_description(message: Message, user: dict, state: FSMContext):
     user_prompt = clean_user_text(message.text)
     await delete_tracked_message(state, message.bot, message.chat.id, "last_personal_prompt_message_id")
     state_data = await state.get_data()
@@ -293,16 +289,14 @@ async def movie_personal_description(message: Message, user: dict, state: FSMCon
         await state.update_data(pending_ai_prompt=None)
 
     if len(user_prompt) < MIN_AI_PROMPT_LENGTH:
-        await message.answer(
-            "Опиши чуть подробнее: настроение, темп, чего хочется или чего избегаем."
-        )
+        await message.answer("Опиши чуть подробнее: настроение, темп и чего точно не хочется.")
         return
     if is_too_long(user_prompt, MAX_AI_PROMPT_LENGTH):
         await message.answer(length_error_text(MAX_AI_PROMPT_LENGTH))
         return
 
     if not has_pending_ai_prompt:
-        clarification_question = personal_clarification_question("movie", user_prompt)
+        clarification_question = personal_clarification_question("series", user_prompt)
         if clarification_question:
             clarification_message = await message.answer(clarification_question)
             await state.update_data(
@@ -316,16 +310,15 @@ async def movie_personal_description(message: Message, user: dict, state: FSMCon
         await message.answer(ai_rate_limit_text(retry_after))
         return
 
-    processing_message = await message.answer(
-        "🧠 Сверяю твой вайб с базой фильмов..."
-    )
+    processing_message = await message.answer("🧠 Сверяю твой вайб с базой сериалов...")
     await message.bot.send_chat_action(
         chat_id=message.chat.id,
         action=ChatAction.UPLOAD_PHOTO,
     )
 
     try:
-        recommendations = await recommend_movies_from_prompt(
+        recommendations = await recommend_content_from_prompt(
+            content_type="series",
             user_id=user["telegram_id"],
             user_prompt=user_prompt,
         )
@@ -333,7 +326,7 @@ async def movie_personal_description(message: Message, user: dict, state: FSMCon
         await state.clear()
         await processing_message.edit_text(
             ai_unavailable_text(),
-            reply_markup=movies_mode_kb(),
+            reply_markup=series_mode_kb(),
         )
         return
 
@@ -341,15 +334,15 @@ async def movie_personal_description(message: Message, user: dict, state: FSMCon
         await state.clear()
         await processing_message.edit_text(
             ai_unavailable_text(),
-            reply_markup=movies_mode_kb(),
+            reply_markup=series_mode_kb(),
         )
         return
 
     await state.set_state(None)
     await state.update_data(
-        movie_personal_candidates=[
+        series_personal_candidates=[
             {
-                "title": result["movie"]["title"],
+                "title": result["item"]["title"],
                 "explanation": result["explanation"],
             }
             for result in recommendations[:2]
@@ -357,21 +350,21 @@ async def movie_personal_description(message: Message, user: dict, state: FSMCon
         personal_candidate_index=0,
     )
 
-    movie = recommendations[0]["movie"]
+    series = recommendations[0]["item"]
     explanation = recommendations[0]["explanation"]
-    is_fav = is_in_favorites(user["telegram_id"], "movie", movie["title"])
-    user_rating = get_user_rating(user["telegram_id"], "movie", movie["title"])
+    is_fav = is_in_favorites(user["telegram_id"], "series", series["title"])
+    user_rating = get_user_rating(user["telegram_id"], "series", series["title"])
     has_backup = len(recommendations) > 1
 
     await state.update_data(
-        current_item=movie,
-        current_type="movie",
+        current_item=series,
+        current_type="series",
         current_vibe=None,
-        current_source="movie_personal",
+        current_source="series_personal",
         current_caption_extra=explanation,
         personal_candidate_index=0,
     )
-    record_content_impression(user["telegram_id"], "movie", movie["title"])
+    record_content_impression(user["telegram_id"], "series", series["title"])
 
     try:
         await processing_message.delete()
@@ -380,11 +373,11 @@ async def movie_personal_description(message: Message, user: dict, state: FSMCon
 
     sent_message = await send_media(
         callback=message,
-        item=movie,
-        content_type="movie",
-        reply_markup=personal_movie_keyboard(
+        item=series,
+        content_type="series",
+        reply_markup=personal_series_keyboard(
             has_backup=has_backup,
-            title=movie["title"],
+            title=series["title"],
             is_favorite=is_fav,
             user_rating=user_rating,
             is_premium=has_premium_access(user),
@@ -393,44 +386,44 @@ async def movie_personal_description(message: Message, user: dict, state: FSMCon
     )
 
 
-@router.callback_query(F.data == "movies_collections")
-async def movies_collections(callback: CallbackQuery, user: dict, state: FSMContext):
+@router.callback_query(F.data == "series_collections")
+async def series_collections(callback: CallbackQuery, user: dict, state: FSMContext):
     if not has_premium_access(user):
         await replace_screen(
             callback,
-            text=premium_feature_locked_text("Premium-подборки фильмов"),
-            reply_markup=movies_mode_kb(),
+            text=premium_feature_locked_text("Premium-подборки сериалов"),
+            reply_markup=series_mode_kb(),
         )
         return
 
-    options = get_random_collection_names("movie", count=3)
+    options = get_random_collection_names("series", count=3)
     if not options:
         await replace_screen(
             callback,
-            text="💎 Premium-подборок для фильмов пока нет. Добавь их через /add.",
-            reply_markup=movies_mode_kb(),
+            text="💎 Premium-подборок для сериалов пока нет. Добавь их через /add.",
+            reply_markup=series_mode_kb(),
         )
         return
 
-    await state.update_data(movie_collection_options=options)
-    await show_movie_collections_screen(callback, state)
+    await state.update_data(series_collection_options=options)
+    await show_series_collections_screen(callback, state)
 
 
-@router.callback_query(F.data == "movies_collections_refresh")
-async def movies_collections_refresh(callback: CallbackQuery, user: dict, state: FSMContext):
+@router.callback_query(F.data == "series_collections_refresh")
+async def series_collections_refresh(callback: CallbackQuery, user: dict, state: FSMContext):
     if not has_premium_access(user):
         await callback.answer("Подборки доступны только в Premium", show_alert=True)
         return
 
-    options = get_random_collection_names("movie", count=3)
-    await state.update_data(movie_collection_options=options)
-    await show_movie_collections_screen(callback, state)
+    options = get_random_collection_names("series", count=3)
+    await state.update_data(series_collection_options=options)
+    await show_series_collections_screen(callback, state)
 
 
-@router.callback_query(F.data.startswith("movie_collection_pick:"))
-async def movie_collection_pick(callback: CallbackQuery, user: dict, state: FSMContext):
+@router.callback_query(F.data.startswith("series_collection_pick:"))
+async def series_collection_pick(callback: CallbackQuery, user: dict, state: FSMContext):
     data = await state.get_data()
-    options = data.get("movie_collection_options", [])
+    options = data.get("series_collection_options", [])
     index = int(callback.data.split(":", 1)[1])
 
     if index < 0 or index >= len(options):
@@ -438,43 +431,43 @@ async def movie_collection_pick(callback: CallbackQuery, user: dict, state: FSMC
         return
 
     collection_name = options[index]
-    movie = get_random_item_from_collection(
-        content_type="movie",
+    series = get_random_item_from_collection(
+        content_type="series",
         collection_name=collection_name,
         user_id=user["telegram_id"],
     )
 
-    if not movie:
+    if not series:
         await callback.answer("В этой подборке пока ничего нет", show_alert=True)
         return
 
     await state.update_data(
-        current_item=movie,
-        current_type="movie",
+        current_item=series,
+        current_type="series",
         current_vibe=None,
-        current_source="movie_collection",
+        current_source="series_collection",
         current_caption_extra=None,
         current_collection_name=collection_name,
     )
-    record_content_impression(user["telegram_id"], "movie", movie["title"])
+    record_content_impression(user["telegram_id"], "series", series["title"])
 
-    is_fav = is_in_favorites(user["telegram_id"], "movie", movie["title"])
-    user_rating = get_user_rating(user["telegram_id"], "movie", movie["title"])
+    is_fav = is_in_favorites(user["telegram_id"], "series", series["title"])
+    user_rating = get_user_rating(user["telegram_id"], "series", series["title"])
     show_next_collection = has_more_in_collection(
-        "movie",
+        "series",
         collection_name,
         user["telegram_id"],
-        current_title=movie["title"],
+        current_title=series["title"],
     )
 
     await callback.message.delete()
     sent_message = await send_media(
         callback=callback,
-        item=movie,
-        content_type="movie",
-        reply_markup=another_movie_keyboard(
+        item=series,
+        content_type="series",
+        reply_markup=another_series_keyboard(
             vibe=None,
-            title=movie["title"],
+            title=series["title"],
             collection_name=collection_name,
             show_next_collection=show_next_collection,
             is_favorite=is_fav,
@@ -485,8 +478,8 @@ async def movie_collection_pick(callback: CallbackQuery, user: dict, state: FSMC
     )
 
 
-@router.callback_query(F.data == "next_movie_collection")
-async def next_movie_collection(callback: CallbackQuery, user: dict, state: FSMContext):
+@router.callback_query(F.data == "next_series_collection")
+async def next_series_collection(callback: CallbackQuery, user: dict, state: FSMContext):
     data = await state.get_data()
     collection_name = data.get("current_collection_name")
 
@@ -494,43 +487,43 @@ async def next_movie_collection(callback: CallbackQuery, user: dict, state: FSMC
         await callback.answer("Подборка уже закрыта", show_alert=True)
         return
 
-    movie = get_random_item_from_collection(
-        content_type="movie",
+    series = get_random_item_from_collection(
+        content_type="series",
         collection_name=collection_name,
         user_id=user["telegram_id"],
     )
 
-    if not movie:
+    if not series:
         await callback.answer("В этой подборке ты уже всё посмотрел за последнее время", show_alert=True)
         return
 
     await state.update_data(
-        current_item=movie,
-        current_type="movie",
+        current_item=series,
+        current_type="series",
         current_vibe=None,
-        current_source="movie_collection",
+        current_source="series_collection",
         current_caption_extra=None,
         current_collection_name=collection_name,
     )
-    record_content_impression(user["telegram_id"], "movie", movie["title"])
+    record_content_impression(user["telegram_id"], "series", series["title"])
 
-    is_fav = is_in_favorites(user["telegram_id"], "movie", movie["title"])
-    user_rating = get_user_rating(user["telegram_id"], "movie", movie["title"])
+    is_fav = is_in_favorites(user["telegram_id"], "series", series["title"])
+    user_rating = get_user_rating(user["telegram_id"], "series", series["title"])
     show_next_collection = has_more_in_collection(
-        "movie",
+        "series",
         collection_name,
         user["telegram_id"],
-        current_title=movie["title"],
+        current_title=series["title"],
     )
 
     await callback.message.delete()
     sent_message = await send_media(
         callback=callback,
-        item=movie,
-        content_type="movie",
-        reply_markup=another_movie_keyboard(
+        item=series,
+        content_type="series",
+        reply_markup=another_series_keyboard(
             vibe=None,
-            title=movie["title"],
+            title=series["title"],
             collection_name=collection_name,
             show_next_collection=show_next_collection,
             is_favorite=is_fav,
@@ -541,17 +534,17 @@ async def next_movie_collection(callback: CallbackQuery, user: dict, state: FSMC
     )
 
 
-@router.callback_query(F.data == "movie_personal_progress")
-async def movie_personal_progress(callback: CallbackQuery):
+@router.callback_query(F.data == "series_personal_progress")
+async def series_personal_progress(callback: CallbackQuery):
     await callback.answer("Просто выбирай вариант ниже")
 
 
-@router.callback_query(MoviePersonalQuiz.answering, F.data.startswith("movie_personal_answer:"))
-async def movie_personal_answer(callback: CallbackQuery, user: dict, state: FSMContext):
+@router.callback_query(SeriesPersonalQuiz.answering, F.data.startswith("series_personal_answer:"))
+async def series_personal_answer(callback: CallbackQuery, user: dict, state: FSMContext):
     data = await state.get_data()
-    question_ids = data.get("movie_personal_question_ids", [])
-    current_index = data.get("movie_personal_question_index", 0)
-    answers_history = data.get("movie_personal_answers", [])
+    question_ids = data.get("series_personal_question_ids", [])
+    current_index = data.get("series_personal_question_index", 0)
+    answers_history = data.get("series_personal_answers", [])
 
     if current_index >= len(question_ids):
         await callback.answer("Вопрос уже закрыт")
@@ -573,16 +566,16 @@ async def movie_personal_answer(callback: CallbackQuery, user: dict, state: FSMC
 
     current_index += 1
     await state.update_data(
-        movie_personal_answers=answers_history,
-        movie_personal_question_index=current_index,
+        series_personal_answers=answers_history,
+        series_personal_question_index=current_index,
     )
 
     if current_index < len(question_ids):
         await pulse_chat_action(callback)
-        await show_movie_personal_question(callback, state)
+        await show_series_personal_question(callback, state)
         return
 
-    recommendations = recommend_movies(
+    recommendations = recommend_series(
         user_id=user["telegram_id"],
         answer_history=answers_history,
     )
@@ -592,15 +585,15 @@ async def movie_personal_answer(callback: CallbackQuery, user: dict, state: FSMC
         await replace_screen(
             callback,
             text=ai_unavailable_text(),
-            reply_markup=movies_mode_kb(),
+            reply_markup=series_mode_kb(),
         )
         return
 
     await state.set_state(None)
     await state.update_data(
-        movie_personal_candidates=[
+        series_personal_candidates=[
             {
-                "title": result["movie"]["title"],
+                "title": result["series"]["title"],
                 "explanation": result["explanation"],
             }
             for result in recommendations[:2]
@@ -611,12 +604,12 @@ async def movie_personal_answer(callback: CallbackQuery, user: dict, state: FSMC
     await show_transition_screen(
         callback,
         text=(
-            "🧠 <b>Персональный подбор фильма</b>\n\n"
-            f"{pick_phrase(MOVIE_TRANSITION_LINES)}"
+            "🧠 <b>Персональный подбор сериала</b>\n\n"
+            f"{pick_phrase(SERIES_TRANSITION_LINES)}"
         ),
         action="upload_photo",
     )
-    await show_personal_movie_result(
+    await show_personal_series_result(
         callback=callback,
         state=state,
         user=user,
@@ -624,12 +617,12 @@ async def movie_personal_answer(callback: CallbackQuery, user: dict, state: FSMC
     )
 
 
-@router.callback_query(F.data == "movie_personal_backup")
-async def movie_personal_backup(callback: CallbackQuery, user: dict, state: FSMContext):
+@router.callback_query(F.data == "series_personal_backup")
+async def series_personal_backup(callback: CallbackQuery, user: dict, state: FSMContext):
     data = await state.get_data()
     current_index = data.get("personal_candidate_index", 0)
 
-    await show_personal_movie_result(
+    await show_personal_series_result(
         callback=callback,
         state=state,
         user=user,
@@ -637,45 +630,45 @@ async def movie_personal_backup(callback: CallbackQuery, user: dict, state: FSMC
     )
 
 
-@router.callback_query(F.data.startswith("fast_vibe:"))
-async def movie_selected(callback: CallbackQuery, user: dict, state: FSMContext):
+@router.callback_query(F.data.startswith("fast_series_vibe:"))
+async def series_selected(callback: CallbackQuery, user: dict, state: FSMContext):
     vibe = callback.data.split(":", 1)[1]
-    movie = get_random_movie(
+    series = get_random_series(
         vibe,
-        excluded_titles=get_recently_seen_titles(user["telegram_id"], "movie"),
+        excluded_titles=get_recently_seen_titles(user["telegram_id"], "series"),
     )
 
-    if not movie:
-        await callback.answer("Фильм не найден", show_alert=True)
+    if not series:
+        await callback.answer("Сериал не найден", show_alert=True)
         return
 
     await state.update_data(
-        current_item=movie,
-        current_type="movie",
+        current_item=series,
+        current_type="series",
         current_vibe=vibe,
-        current_source="movie_fast",
+        current_source="series_fast",
         current_caption_extra=None,
         fast_vibe_seen_count=1,
     )
-    record_content_impression(user["telegram_id"], "movie", movie["title"])
+    record_content_impression(user["telegram_id"], "series", series["title"])
     show_another = has_more_in_fast_vibe(
-        "movie",
+        "series",
         vibe,
-        excluded_titles=get_recently_seen_titles(user["telegram_id"], "movie"),
+        excluded_titles=get_recently_seen_titles(user["telegram_id"], "series"),
     )
 
-    is_fav = is_in_favorites(user["telegram_id"], "movie", movie["title"])
-    user_rating = get_user_rating(user["telegram_id"], "movie", movie["title"])
+    is_fav = is_in_favorites(user["telegram_id"], "series", series["title"])
+    user_rating = get_user_rating(user["telegram_id"], "series", series["title"])
 
     await callback.message.delete()
 
     sent_message = await send_media(
         callback=callback,
-        item=movie,
-        content_type="movie",
-        reply_markup=another_movie_keyboard(
+        item=series,
+        content_type="series",
+        reply_markup=another_series_keyboard(
             vibe=vibe,
-            title=movie["title"],
+            title=series["title"],
             show_another=show_another,
             show_change_vibe=False,
             is_favorite=is_fav,
@@ -686,52 +679,52 @@ async def movie_selected(callback: CallbackQuery, user: dict, state: FSMContext)
     await track_active_screen(state, sent_message)
 
 
-@router.callback_query(F.data.startswith("another_movie:"))
-async def another_movie(callback: CallbackQuery, user: dict, state: FSMContext):
+@router.callback_query(F.data.startswith("another_series:"))
+async def another_series(callback: CallbackQuery, user: dict, state: FSMContext):
     data = await state.get_data()
     vibe = callback.data.split(":", 1)[1]
-    movie = get_random_movie(
+    series = get_random_series(
         vibe,
-        excluded_titles=get_recently_seen_titles(user["telegram_id"], "movie"),
+        excluded_titles=get_recently_seen_titles(user["telegram_id"], "series"),
     )
 
-    if not movie:
-        await movies_fast(callback, user, state)
+    if not series:
+        await series_fast(callback, user, state)
         return
 
     seen_count = (
         int(data.get("fast_vibe_seen_count", 1)) + 1
-        if data.get("current_vibe") == vibe and data.get("current_source") == "movie_fast"
+        if data.get("current_vibe") == vibe and data.get("current_source") == "series_fast"
         else 1
     )
 
     await state.update_data(
-        current_item=movie,
-        current_type="movie",
+        current_item=series,
+        current_type="series",
         current_vibe=vibe,
-        current_source="movie_fast",
+        current_source="series_fast",
         current_caption_extra=None,
         fast_vibe_seen_count=seen_count,
     )
-    record_content_impression(user["telegram_id"], "movie", movie["title"])
+    record_content_impression(user["telegram_id"], "series", series["title"])
     show_another = has_more_in_fast_vibe(
-        "movie",
+        "series",
         vibe,
-        excluded_titles=get_recently_seen_titles(user["telegram_id"], "movie"),
+        excluded_titles=get_recently_seen_titles(user["telegram_id"], "series"),
     )
 
-    is_fav = is_in_favorites(user["telegram_id"], "movie", movie["title"])
-    user_rating = get_user_rating(user["telegram_id"], "movie", movie["title"])
+    is_fav = is_in_favorites(user["telegram_id"], "series", series["title"])
+    user_rating = get_user_rating(user["telegram_id"], "series", series["title"])
 
     await callback.message.delete()
 
     sent_message = await send_media(
         callback=callback,
-        item=movie,
-        content_type="movie",
-        reply_markup=another_movie_keyboard(
+        item=series,
+        content_type="series",
+        reply_markup=another_series_keyboard(
             vibe=vibe,
-            title=movie["title"],
+            title=series["title"],
             show_another=show_another,
             show_change_vibe=seen_count >= 2,
             is_favorite=is_fav,
@@ -742,15 +735,15 @@ async def another_movie(callback: CallbackQuery, user: dict, state: FSMContext):
     await track_active_screen(state, sent_message)
 
 
-@router.callback_query(F.data == "refresh_fast_vibes")
-async def refresh_fast_vibes(callback: CallbackQuery, user: dict, state: FSMContext):
-    excluded_titles = get_recently_seen_titles(user["telegram_id"], "movie")
-    keyboard = movie_vibe_keyboard(excluded_titles=excluded_titles)
-    text = "🎬 Какой сейчас вайб?"
+@router.callback_query(F.data == "refresh_series_vibes")
+async def refresh_series_vibes(callback: CallbackQuery, user: dict, state: FSMContext):
+    excluded_titles = get_recently_seen_titles(user["telegram_id"], "series")
+    keyboard = series_vibe_keyboard(excluded_titles=excluded_titles)
+    text = "📺 Какой сейчас вайб?"
 
     if len(keyboard.inline_keyboard) <= 2:
         text = (
-            "🎬 По фильмам ты уже выжег все свежие вайбы за последнее время.\n\n"
+            "📺 По сериалам ты уже выжег все свежие вайбы за последнее время.\n\n"
             "Попробуй чуть позже, или нажми 🦉 Удиви меня."
         )
 

@@ -1,0 +1,7 @@
+import random
+from data.movie_vibes import MOVIE_FAST_VIBES
+
+
+def get_random_movie_vibes(count: int = 4):
+    keys = list(MOVIE_FAST_VIBES.keys())
+    return random.sample(keys, k=min(count, len(keys)))
