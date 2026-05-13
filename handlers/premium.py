@@ -1,7 +1,8 @@
 from datetime import datetime
 
 from aiogram import F, Router
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject
+from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -11,11 +12,22 @@ from aiogram.types import (
     PreCheckoutQuery,
 )
 
-from config import PREMIUM_PLANS
+from config import (
+    PREMIUM_PLANS,
+    PREMIUM_PROMO_CODES,
+    PREMIUM_PROMO_DAYS,
+    PREMIUM_PROMO_MAX_REDEEMS,
+)
 from handlers.start import main_menu_text, start_keyboard
+from states.premium import PremiumPromoFlow
 from utils.access import premium_status_text
 from utils.admin_notify import notify_admins
 from utils.analytics import track_event
+from utils.db import (
+    count_promo_code_redemptions,
+    has_redeemed_promo_code,
+    record_promo_code_redemption,
+)
 from utils.ui import replace_screen
 from utils.users import activate_premium, record_premium_payment
 
@@ -50,6 +62,9 @@ def premium_keyboard(user: dict) -> InlineKeyboardMarkup:
         ]
         for payload, plan in PREMIUM_PLANS.items()
     ]
+    inline_keyboard.append(
+        [InlineKeyboardButton(text="🎟 Ввести промокод", callback_data="premium_promo")]
+    )
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
@@ -58,7 +73,7 @@ def premium_info_text(user: dict) -> str:
         premium_status_text(user),
         "",
         "Преимущества:",
-        "• Больше персональных подборов",
+        "• 15 персональных подборов в день",
         "• Отдельные подборки контента",
         "• Безлимитное избранное",
         "• Премиальная реакция подписчика базы💼 на контент",
@@ -87,6 +102,83 @@ def premium_info_text(user: dict) -> str:
     return "\n".join(lines)
 
 
+def normalize_promo_code(code: str) -> str:
+    return code.strip().upper()
+
+
+async def activate_promo_for_user(message: Message, user: dict, raw_code: str):
+    code = normalize_promo_code(raw_code)
+
+    if not code:
+        await message.answer("Напиши промокод одним сообщением.")
+        return
+
+    if not PREMIUM_PROMO_CODES:
+        await message.answer(
+            "Промокоды пока не настроены. БАЗА смотрит на пустую полку и делает вид, что так задумано."
+        )
+        return
+
+    if code not in PREMIUM_PROMO_CODES:
+        await message.answer(
+            "Промокод не подошёл. Либо опечатка, либо тайный клуб сегодня без тебя."
+        )
+        return
+
+    if has_redeemed_promo_code(user["telegram_id"], code):
+        await message.answer(
+            "Этот промокод ты уже активировал. Второй раз БАЗА делает вид, что не слышит."
+        )
+        return
+
+    if PREMIUM_PROMO_MAX_REDEEMS > 0:
+        redeemed_count = count_promo_code_redemptions(code)
+        if redeemed_count >= PREMIUM_PROMO_MAX_REDEEMS:
+            await message.answer(
+                "Лимит активаций этого промокода уже закончился. Промокод был хорош, но смертен."
+            )
+            return
+
+    premium_until = activate_premium(
+        telegram_id=user["telegram_id"],
+        duration_days=PREMIUM_PROMO_DAYS,
+    )
+    record_promo_code_redemption(
+        user_id=user["telegram_id"],
+        code=code,
+        premium_until=premium_until,
+    )
+
+    track_event(
+        user["telegram_id"],
+        "premium_promo_activated",
+        source=code,
+        metadata={"days": PREMIUM_PROMO_DAYS},
+    )
+    await notify_admins(
+        message.bot,
+        (
+            "🎟 Premium promo activated\n"
+            f"User: {user['telegram_id']}\n"
+            f"Code: {code}\n"
+            f"Days: {PREMIUM_PROMO_DAYS}\n"
+            f"Until: {premium_until}"
+        ),
+    )
+
+    premium_until_text = datetime.fromisoformat(premium_until).strftime("%d.%m.%Y")
+    await message.answer(
+        (
+            "🎟 <b>Промокод принят</b>\n\n"
+            f"Premium открыт на <b>{PREMIUM_PROMO_DAYS} дней</b>.\n"
+            f"Доступ активен до <b>{premium_until_text}</b>.\n\n"
+            "БАЗА официально делает вид, что так и планировала."
+        ),
+        parse_mode="HTML",
+        reply_markup=start_keyboard(),
+    )
+
+
 @router.message(F.text == "💎 Premium")
 async def premium_info_button(message: Message, user: dict):
     track_event(user["telegram_id"], "premium_opened", source="bottom_nav")
@@ -95,6 +187,41 @@ async def premium_info_button(message: Message, user: dict):
         reply_markup=premium_keyboard(user),
         parse_mode="HTML",
     )
+
+
+@router.message(Command("promo"))
+async def promo_command(message: Message, command: CommandObject, user: dict, state: FSMContext):
+    code = command.args or ""
+    if code:
+        await state.clear()
+        await activate_promo_for_user(message, user, code)
+        return
+
+    await state.set_state(PremiumPromoFlow.waiting_code)
+    await message.answer(
+        "🎟 <b>Напиши промокод</b>\n\n"
+        "Если код настоящий, открою Premium на месяц. Если нет — сделаю вид, что это философский эксперимент.",
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data == "premium_promo")
+async def premium_promo(callback: CallbackQuery, user: dict, state: FSMContext):
+    await callback.answer()
+    await state.set_state(PremiumPromoFlow.waiting_code)
+    await replace_screen(
+        callback,
+        text=(
+            "🎟 <b>Напиши промокод</b>\n\n"
+            "Одним сообщением. Если всё совпадёт, Premium откроется на месяц."
+        ),
+    )
+
+
+@router.message(PremiumPromoFlow.waiting_code, F.text)
+async def premium_promo_code(message: Message, user: dict, state: FSMContext):
+    await state.clear()
+    await activate_promo_for_user(message, user, message.text)
 
 
 @router.callback_query(F.data == "premium_info")

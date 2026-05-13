@@ -10,6 +10,8 @@ from utils.db import (
     init_free_favorites_export_usage,
     init_free_personal_usage,
     init_game_platform_preferences,
+    init_premium_personal_usage,
+    init_premium_promo_redemptions,
     init_premium_reward_requests,
     init_ratings,
 )
@@ -50,7 +52,9 @@ def init_all():
     init_game_platform_preferences()
     init_content_menu_preferences()
     init_free_personal_usage()
+    init_premium_personal_usage()
     init_free_favorites_export_usage()
+    init_premium_promo_redemptions()
     init_favorites()
     init_ratings()
     init_content_views()

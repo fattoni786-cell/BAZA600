@@ -88,12 +88,14 @@ def delete_user_data(user_id: int):
     execute("DELETE FROM game_platform_preferences WHERE user_id = ?", (user_id,))
     execute("DELETE FROM content_menu_preferences WHERE user_id = ?", (user_id,))
     execute("DELETE FROM free_personal_usage WHERE user_id = ?", (user_id,))
+    execute("DELETE FROM premium_personal_usage WHERE user_id = ?", (user_id,))
     execute("DELETE FROM free_favorites_export_usage WHERE user_id = ?", (user_id,))
     execute("DELETE FROM blocked_users WHERE user_id = ?", (user_id,))
     execute("DELETE FROM content_suggestions WHERE user_id = ?", (user_id,))
     execute("DELETE FROM premium_reward_requests WHERE user_id = ?", (user_id,))
     execute("DELETE FROM admin_content_drafts WHERE suggested_by_user_id = ?", (user_id,))
     execute("DELETE FROM premium_payments WHERE telegram_id = ?", (user_id,))
+    execute("DELETE FROM premium_promo_redemptions WHERE user_id = ?", (user_id,))
     execute("DELETE FROM users WHERE telegram_id = ?", (user_id,))
 
 
@@ -253,6 +255,88 @@ def set_free_personal_last_used(user_id: int, used_at: str):
     ON CONFLICT(user_id)
     DO UPDATE SET last_used_at = excluded.last_used_at
     """, (user_id, used_at))
+
+
+# =========================
+# PREMIUM PERSONAL DAILY USAGE
+# =========================
+def init_premium_personal_usage():
+    execute("""
+    CREATE TABLE IF NOT EXISTS premium_personal_usage (
+        user_id INTEGER NOT NULL,
+        usage_date TEXT NOT NULL,
+        used_count INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (user_id, usage_date)
+    )
+    """)
+
+
+def get_premium_personal_used_count(user_id: int, usage_date: str) -> int:
+    row = fetch_one("""
+    SELECT used_count
+    FROM premium_personal_usage
+    WHERE user_id = ? AND usage_date = ?
+    """, (user_id, usage_date))
+    return row[0] if row else 0
+
+
+def increment_premium_personal_used_count(user_id: int, usage_date: str):
+    execute("""
+    INSERT INTO premium_personal_usage (user_id, usage_date, used_count, updated_at)
+    VALUES (?, ?, 1, CURRENT_TIMESTAMP)
+    ON CONFLICT(user_id, usage_date)
+    DO UPDATE SET
+        used_count = used_count + 1,
+        updated_at = CURRENT_TIMESTAMP
+    """, (user_id, usage_date))
+
+
+# =========================
+# PREMIUM PROMO CODES
+# =========================
+def init_premium_promo_redemptions():
+    execute("""
+    CREATE TABLE IF NOT EXISTS premium_promo_redemptions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        code TEXT NOT NULL,
+        premium_until TEXT NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, code)
+    )
+    """)
+    execute("""
+    CREATE INDEX IF NOT EXISTS idx_premium_promo_redemptions_code
+    ON premium_promo_redemptions(code)
+    """)
+
+
+def has_redeemed_promo_code(user_id: int, code: str) -> bool:
+    row = fetch_one("""
+    SELECT 1
+    FROM premium_promo_redemptions
+    WHERE user_id = ? AND code = ?
+    """, (user_id, code))
+    return row is not None
+
+
+def count_promo_code_redemptions(code: str) -> int:
+    row = fetch_one("""
+    SELECT COUNT(*)
+    FROM premium_promo_redemptions
+    WHERE code = ?
+    """, (code,))
+    return row[0] if row else 0
+
+
+def record_promo_code_redemption(user_id: int, code: str, premium_until: str):
+    execute("""
+    INSERT OR IGNORE INTO premium_promo_redemptions (
+        user_id, code, premium_until
+    )
+    VALUES (?, ?, ?)
+    """, (user_id, code, premium_until))
 
 
 # =========================

@@ -15,10 +15,13 @@ from keyboards.common.premium_collections import premium_collections_keyboard
 from states.book_personal import BookPersonalQuiz
 from utils.access import (
     consume_free_personal_use,
+    consume_premium_personal_use,
     free_personal_locked_text,
     free_personal_status,
     has_premium_access,
     premium_feature_locked_text,
+    premium_personal_locked_text,
+    premium_personal_status,
 )
 from utils.ai_fallback import ai_unavailable_text
 from utils.ai_clarification import combine_prompt_with_clarification, personal_clarification_question
@@ -317,7 +320,17 @@ async def books_surprise(callback: CallbackQuery, user: dict, state: FSMContext)
 async def books_personal(callback: CallbackQuery, user: dict, state: FSMContext):
     await delete_last_audio(state, callback)
 
-    if not has_premium_access(user):
+    if has_premium_access(user):
+        can_use, next_available_at, _remaining = premium_personal_status(user)
+        if not can_use and next_available_at:
+            await replace_screen(
+                callback,
+                text=premium_personal_locked_text("Персональный подбор книг", next_available_at),
+                reply_markup=books_mode_kb(),
+            )
+            return
+        consume_premium_personal_use(user["telegram_id"])
+    else:
         can_use, next_available_at = free_personal_status(user)
         if not can_use and next_available_at:
             await replace_screen(

@@ -3,7 +3,9 @@ from datetime import datetime, timedelta
 from utils.db import (
     get_free_favorites_export_last_used,
     get_free_personal_last_used,
+    get_premium_personal_used_count,
     get_user_favorites,
+    increment_premium_personal_used_count,
     set_free_favorites_export_last_used,
     set_free_personal_last_used,
 )
@@ -11,6 +13,7 @@ from utils.users import is_premium
 
 FREE_FAVORITES_LIMIT = 3
 FREE_PERSONAL_COOLDOWN_HOURS = 24
+PREMIUM_PERSONAL_DAILY_LIMIT = 15
 FREE_FAVORITES_EXPORT_COOLDOWN_DAYS = 7
 
 
@@ -86,12 +89,45 @@ def consume_free_personal_use(user_id: int):
     set_free_personal_last_used(user_id, datetime.utcnow().isoformat())
 
 
+def premium_personal_status(user: dict) -> tuple[bool, datetime | None, int]:
+    if not has_premium_access(user):
+        return True, None, 0
+
+    now = datetime.utcnow()
+    usage_date = now.date().isoformat()
+    used_count = get_premium_personal_used_count(user["telegram_id"], usage_date)
+    remaining = max(PREMIUM_PERSONAL_DAILY_LIMIT - used_count, 0)
+
+    if remaining > 0:
+        return True, None, remaining
+
+    next_available_at = (now + timedelta(days=1)).replace(
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    return False, next_available_at, 0
+
+
+def consume_premium_personal_use(user_id: int):
+    increment_premium_personal_used_count(user_id, datetime.utcnow().date().isoformat())
+
+
+def premium_personal_locked_text(feature_name: str, next_available_at: datetime) -> str:
+    formatted = next_available_at.strftime("%d.%m %H:%M")
+    return (
+        f"💎 <b>{feature_name}</b> для Premium доступен <b>{PREMIUM_PERSONAL_DAILY_LIMIT} раз в день</b>.\n\n"
+        f"Сегодня лимит уже использован. Новый запас персональных подборов откроется после <b>{formatted}</b>."
+    )
+
+
 def free_personal_locked_text(feature_name: str, next_available_at: datetime) -> str:
     formatted = next_available_at.strftime("%d.%m %H:%M")
     return (
         f"🤗 <b>{feature_name}</b> для Free доступен <b>1 раз в 24 часа</b>.\n\n"
         f"Следующий персональный подбор откроется после <b>{formatted}</b>.\n\n"
-        "Premium снимает это ограничение и даёт безлимитный персональный подбор."
+        f"Premium расширяет лимит до <b>{PREMIUM_PERSONAL_DAILY_LIMIT} персональных подборов в день</b>."
     )
 
 
