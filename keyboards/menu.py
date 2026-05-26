@@ -16,6 +16,8 @@ def bottom_nav_kb():
                 KeyboardButton(text="💎 Premium"),
             ],
         ],
+        is_persistent=True,
         resize_keyboard=True,
+        one_time_keyboard=False,
         input_field_placeholder="Выбери раздел",
     )

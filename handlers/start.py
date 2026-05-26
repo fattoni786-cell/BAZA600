@@ -5,6 +5,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from keyboards.menu import bottom_nav_kb
 from utils.analytics import track_event
 from utils.db import get_user_content_menu_types, set_user_content_menu_types
 from utils.ui import delete_active_screen, delete_tracked_message, replace_screen, track_active_screen
@@ -286,6 +287,9 @@ def main_menu_text(user: dict) -> str:
 
 
 async def send_main_menu(message: Message, user: dict, refresh_bottom_nav: bool = False):
+    if refresh_bottom_nav:
+        await message.answer("Нижнее меню включено.", reply_markup=bottom_nav_kb())
+
     sent_message = await message.answer(
         main_menu_text(user),
         reply_markup=start_keyboard(),
